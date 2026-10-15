@@ -1,0 +1,15 @@
+# sample: mix of clean domains, official targets, and attack samples
+# (homograph samples contain non-ASCII lookalikes)
+bsi.co.id
+portal.sso.pajak.go.id
+bpjs-kesehatan.go.id
+google.com
+kemenkeu-ri.go.id
+tokopediа.com
+klıkbca.co.id
+ѕһорее.co.id
+b4nk-mandiri.co.id
+telkomse1.com
+bca-login.com
+klikbca-indonesia.com
+中国.id
