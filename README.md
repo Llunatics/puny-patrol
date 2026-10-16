@@ -63,13 +63,14 @@ klikbca-indonesia.com        | klikbca-indonesia.com    | SUSPICIOUS | 40    | B
 | `UNEXPECTED_TLD` | +45 | exact brand SLD on wrong TLD |
 | `BRAND_COMBO` / combining marks | +40 | `klikbca-indonesia.com` |
 | `TYPOSQUAT_DIST2` | +35 | distance-2 on 8+ char brands |
+| `INVALID_PUNYCODE` | +30 | broken `xn--` label → `SUSPICIOUS` |
 
 Score ≥ 60 → `MALICIOUS`, 25–59 → `SUSPICIOUS`, < 25 → `CLEAN`.
 
 ## Tests
 
 ```bash
-python3 tests/test_puny_patrol.py   # 31 checks, stdlib only — no pytest needed
+python3 tests/test_puny_patrol.py   # 33 checks, stdlib only — no pytest needed
 ```
 
 ## Limitations

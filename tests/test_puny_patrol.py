@@ -101,4 +101,12 @@ check(v == "SUSPICIOUS", "brand combo unexpected tld suspicious")
 v, s, r = verdict("https://tokopediа.com/login?x=1")
 check(v == "MALICIOUS", "url input handled")
 
+# --- integration: invalid punycode --------------------------------------------
+v, s, r = verdict("xn--invlid-.com")
+check(v == "SUSPICIOUS" and "INVALID_PUNYCODE" in r,
+      "broken punycode no longer scores zero")
+v, s, r = verdict("xn--80ak6aa92bd.com")
+check(v == "SUSPICIOUS" and "INVALID_PUNYCODE" in r,
+      "garbage punycode flagged suspicious")
+
 print("\n%d tests passed" % PASS)

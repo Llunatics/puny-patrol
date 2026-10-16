@@ -23,7 +23,7 @@ import sys
 import unicodedata
 from encodings import idna
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 
 # ---------------------------------------------------------------------------
 # Confusable skeleton map (subset of Unicode confusables, UTS #39)
@@ -281,6 +281,10 @@ W_UNEXPECTED_TLD = 45
 W_BRAND_COMBO = 40
 W_COMBINING_MARKS = 40
 W_UNASSIGNED_CHAR = 50
+# Invalid Punycode: a broken xn-- label can never be a real registered
+# domain (registries validate IDNA) — worth flagging in triage even when
+# no other signal fires.
+W_INVALID_PUNYCODE = 30
 
 
 def analyze_domain(raw):
@@ -294,6 +298,9 @@ def analyze_domain(raw):
     _raw_labels, labels, flags = decode_domain(host)
     reasons = list(flags)
     score = 0
+    for f in flags:
+        if f == "INVALID_PUNYCODE":
+            score += W_INVALID_PUNYCODE
 
     # Per-label script analysis (covers subdomains too).
     scripts_per_label = []
