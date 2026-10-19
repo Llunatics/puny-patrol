@@ -301,3 +301,23 @@ class TestInvariants(unittest.TestCase):
             self.assertIn(r["verdict"], ("CLEAN", "SUSPICIOUS", "MALICIOUS"))
             self.assertGreaterEqual(r["score"], 0)
             self.assertLessEqual(r["score"], 100)
+
+
+class TestCliErrors(unittest.TestCase):
+    def test_missing_file(self):
+        with self.assertRaises(SystemExit) as cm:
+            main(["--file", "/tidak/ada.txt"])
+        self.assertEqual(cm.exception.code, 1)
+
+    def test_stdin_pipe(self):
+        import io as _io
+        old = sys.stdin
+        sys.stdin = _io.StringIO("google.com\n")
+        try:
+            buf = _io.StringIO()
+            with redirect_stdout(buf):
+                rc = main([])
+            self.assertEqual(rc, 0)
+            self.assertIn("CLEAN", buf.getvalue())
+        finally:
+            sys.stdin = old
