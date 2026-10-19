@@ -72,6 +72,7 @@ klikbca-indonesia.com        | klikbca-indonesia.com    | SUSPICIOUS | 40    | B
 | `SUBDOMAIN_BRAND` | +40 | brand in subdomain: `klikbca.co.id.evil.com` |
 | `TYPOSQUAT_DIST2` | +35 | distance-2 on 8+ char brands |
 | `INVALID_PUNYCODE` | +30 | broken `xn--` label → `SUSPICIOUS` |
+| `UNASSIGNED_CHAR` | +50 | unassigned/control codepoint in label |
 
 Score ≥ 60 → `MALICIOUS`, 25–59 → `SUSPICIOUS`, < 25 → `CLEAN`.
 
