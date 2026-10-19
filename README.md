@@ -78,7 +78,7 @@ Score ≥ 60 → `MALICIOUS`, 25–59 → `SUSPICIOUS`, < 25 → `CLEAN`.
 ## Tests
 
 ```bash
-python3 -m unittest discover -s tests   # 50 tests, stdlib only — no pytest needed
+python3 -m unittest discover -s tests   # 52 tests, stdlib only — no pytest needed
 ```
 
 ## Limitations
