@@ -44,9 +44,16 @@ $ ./puny_patrol.py -f tests/sample-domains.txt
 INPUT                        | UNICODE                  | VERDICT    | SCORE | REASONS
 --------------------------------------------------------------------------------------
 bsi.co.id                    | bsi.co.id                | CLEAN      | 0     | OFFICIAL_TARGET_MATCH
+portal.sso.pajak.go.id       | portal.sso.pajak.go.id   | CLEAN      | 0     | OFFICIAL_SUBDOMAIN
+bpjs-kesehatan.go.id         | bpjs-kesehatan.go.id     | CLEAN      | 0     | OFFICIAL_TARGET_MATCH
+google.com                   | google.com               | CLEAN      | 0     | NO_FINDINGS
+kemenkeu-ri.go.id            | kemenkeu-ri.go.id        | CLEAN      | 0     | NO_FINDINGS
 tokopediа.com                | tokopediа.com            | MALICIOUS  | 100   | MIXED_SCRIPT(CYRILLIC+LATIN), SKELETON_HOMOGRAPH(tokopedia)
 klıkbca.co.id                | klıkbca.co.id            | MALICIOUS  | 85    | SKELETON_HOMOGRAPH(klikbca)
+ѕһорее.co.id                 | ѕһорее.co.id             | MALICIOUS  | 85    | SKELETON_HOMOGRAPH(shopee)
 b4nk-mandiri.co.id           | b4nk-mandiri.co.id       | MALICIOUS  | 75    | LEET_HYPHEN_SPOOF(bankmandiri)
+telkomse1.com                | telkomse1.com            | MALICIOUS  | 75    | LEET_HYPHEN_SPOOF(telkomsel)
+bca-login.com                | bca-login.com            | SUSPICIOUS | 40    | BRAND_COMBO(bca)
 klikbca-indonesia.com        | klikbca-indonesia.com    | SUSPICIOUS | 40    | BRAND_COMBO(klikbca)
 中国.id                        | 中国.id                    | CLEAN      | 0     | NO_FINDINGS
 13 domain(s) checked: 5 malicious, 2 suspicious, 6 clean
