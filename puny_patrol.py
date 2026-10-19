@@ -445,6 +445,18 @@ def _result(raw, labels, verdict, score, reasons):
 # Output
 # ---------------------------------------------------------------------------
 
+_TERM_UNSAFE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def _term_safe(s):
+    """Strip control chars so untrusted input can't inject terminal escapes.
+
+    Only used for human-readable terminal output; --json keeps raw values
+    (json.dumps escapes them safely).
+    """
+    return _TERM_UNSAFE.sub("", s if isinstance(s, str) else str(s))
+
+
 def render_table(results):
     header = "%-28s | %-24s | %-10s | %-5s | %s" % (
         "INPUT", "UNICODE", "VERDICT", "SCORE", "REASONS")
@@ -453,7 +465,7 @@ def render_table(results):
     for r in results:
         reasons = ", ".join(r["reasons"]) if r["reasons"] else "-"
         print("%-28s | %-24s | %-10s | %-5d | %s" % (
-            r["input"][:28], r["unicode"][:24],
+            _term_safe(r["input"][:28]), _term_safe(r["unicode"][:24]),
             r["verdict"], r["score"], reasons))
     print("%d domain(s) checked: %d malicious, %d suspicious, %d clean" % (
         len(results),

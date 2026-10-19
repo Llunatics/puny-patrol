@@ -327,3 +327,20 @@ class TestSigpipe(unittest.TestCase):
     def test_broken_pipe_no_traceback(self):
         import signal
         self.assertEqual(signal.getsignal(signal.SIGPIPE), signal.SIG_DFL)
+
+
+class TestAnsiInjection(unittest.TestCase):
+    def test_table_strips_escapes(self):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            main(["evil\x1b[31mRED\x1b[0m.com"])
+        self.assertNotIn("\x1b", buf.getvalue())
+        self.assertIn("evil", buf.getvalue())
+
+    def test_json_keeps_safe_encoding(self):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            main(["--json", "evil\x1b[31m.com"])
+        self.assertNotIn("\x1b[31m", buf.getvalue())  # json \u001b-escaped
+        data = json.loads(buf.getvalue())
+        self.assertIn("\x1b[31m", data[0]["input"])  # raw value preserved
