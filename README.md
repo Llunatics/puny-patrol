@@ -79,3 +79,7 @@ python3 -m unittest discover -s tests   # 50 tests, stdlib only — no pytest ne
 - Confusable map is a curated subset (~35 entries), not full UTS #39 — rare scripts may slip through
 - Brand catalog covers major Indonesian targets only; edit `OFFICIAL_DOMAINS` in source to extend
 - Heuristic scores are triage signals, not proof of maliciousness — verify before blocking
+
+## License
+
+MIT — see [LICENSE](LICENSE).
