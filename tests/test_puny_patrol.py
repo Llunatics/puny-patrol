@@ -321,3 +321,9 @@ class TestCliErrors(unittest.TestCase):
             self.assertIn("CLEAN", buf.getvalue())
         finally:
             sys.stdin = old
+
+
+class TestSigpipe(unittest.TestCase):
+    def test_broken_pipe_no_traceback(self):
+        import signal
+        self.assertEqual(signal.getsignal(signal.SIGPIPE), signal.SIG_DFL)

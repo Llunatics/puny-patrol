@@ -23,6 +23,13 @@ import sys
 import unicodedata
 from encodings import idna
 
+# Clean exit on broken pipes (e.g. `puny_patrol.py list.txt | head`).
+try:
+    from signal import SIG_DFL, SIGPIPE, signal
+    signal(SIGPIPE, SIG_DFL)
+except Exception:
+    pass
+
 VERSION = "1.0.1"
 
 # ---------------------------------------------------------------------------
