@@ -338,7 +338,7 @@ def analyze_domain(raw):
         if skel not in BRAND_TLDS:
             reasons.append("SINGLE_SCRIPT_NON_LATIN(%s)"
                            % "+".join(sorted(all_scripts)))
-            return _result(raw, labels, "CLEAN", score, reasons)
+            return _result(raw, labels, "CLEAN", min(score, 100), reasons)
 
     skeleton = to_skeleton(sld)
 
@@ -358,11 +358,26 @@ def analyze_domain(raw):
 
     # 3. Brand-as-token: protected brand embedded as hyphenated token on a
     #    different/unexpected TLD (e.g. klikbca-indonesia.com).
-    for brand in BRAND_TLDS:
+    for brand in sorted(BRAND_TLDS):
         if brand != sld and brand in re.split(r"[-_.]", sld):
             reasons.append("BRAND_COMBO(%s)" % brand)
             score += W_BRAND_COMBO
             break
+
+    # 3b. Brand in subdomain: klikbca.co.id.evil.com — the registrable SLD
+    # is innocent, but a subdomain impersonates the brand (classic phish).
+    sub_brand = None
+    for sub in subdomains:
+        sub_skel = to_skeleton(sub)
+        for brand in sorted(BRAND_TLDS):
+            if sub_skel == brand or brand in re.split(r"[-_.]", sub_skel):
+                sub_brand = brand
+                break
+        if sub_brand:
+            break
+    if sub_brand:
+        reasons.append("SUBDOMAIN_BRAND(%s)" % sub_brand)
+        score += W_BRAND_COMBO
 
     # 4. Cross-TLD spoof: exact brand SLD on a non-official TLD.
     if sld in BRAND_TLDS and tld and tld not in BRAND_TLDS[sld]:

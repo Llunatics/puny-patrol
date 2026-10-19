@@ -62,6 +62,7 @@ klikbca-indonesia.com        | klikbca-indonesia.com    | SUSPICIOUS | 40    | B
 | `MIXED_SCRIPT` | +65 | `tokopediа.com` (Cyrillic а) |
 | `UNEXPECTED_TLD` | +45 | exact brand SLD on wrong TLD |
 | `BRAND_COMBO` / combining marks | +40 | `klikbca-indonesia.com` |
+| `SUBDOMAIN_BRAND` | +40 | brand in subdomain: `klikbca.co.id.evil.com` |
 | `TYPOSQUAT_DIST2` | +35 | distance-2 on 8+ char brands |
 | `INVALID_PUNYCODE` | +30 | broken `xn--` label → `SUSPICIOUS` |
 
@@ -70,7 +71,7 @@ Score ≥ 60 → `MALICIOUS`, 25–59 → `SUSPICIOUS`, < 25 → `CLEAN`.
 ## Tests
 
 ```bash
-python3 tests/test_puny_patrol.py   # 33 checks, stdlib only — no pytest needed
+python3 -m unittest discover -s tests   # 47 tests, stdlib only — no pytest needed
 ```
 
 ## Limitations
