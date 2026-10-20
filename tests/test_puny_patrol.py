@@ -344,3 +344,56 @@ class TestAnsiInjection(unittest.TestCase):
         self.assertNotIn("\x1b[31m", buf.getvalue())  # json \u001b-escaped
         data = json.loads(buf.getvalue())
         self.assertIn("\x1b[31m", data[0]["input"])  # raw value preserved
+
+
+class TestMutationDeep9(unittest.TestCase):
+    """Regression tests from deep-9 mutation testing (2026-10-20)."""
+
+    def test_whole_script_homograph_nonlatin_tld(self):
+        # PP05: the single-script early return must NOT whitewash a domain
+        # whose skeleton matches a brand, even when every label (incl. TLD)
+        # is non-Latin (Latin labels like .co.id bypass that block entirely).
+        v, s, r = verdict("ѕһорее.αβ")
+        self.assertEqual(v, "MALICIOUS")
+        self.assertTrue(any(x.startswith("SKELETON_HOMOGRAPH") for x in r))
+
+    def test_brand_combo_counts_once(self):
+        # PP09: multiple brand tokens in one SLD score BRAND_COMBO once.
+        v, s, r = verdict("bca-bri-tokopedia.com")
+        self.assertEqual((v, s), ("SUSPICIOUS", 40))
+        self.assertEqual(len([x for x in r if x.startswith("BRAND_COMBO")]), 1)
+
+    def test_subdomain_brand_token(self):
+        # PP10: brand as a hyphen token inside a subdomain still flags.
+        v, s, r = verdict("login-klikbca.evil.com")
+        self.assertEqual(v, "SUSPICIOUS")
+        self.assertTrue(any(x.startswith("SUBDOMAIN_BRAND") for x in r))
+
+    def test_short_skeleton_no_dist1(self):
+        # PP12: 4-char skeletons are guarded out of DIST1 typosquat.
+        v, s, r = verdict("bnix.com")
+        self.assertEqual(v, "CLEAN")
+        self.assertFalse(any(x.startswith("TYPOSQUAT_DIST1") for x in r))
+
+    def test_dist2_needs_len8(self):
+        # PP13: DIST2 only fires for skeletons of length >= 8.
+        v, s, r = verdict("tokoped.com")
+        self.assertEqual(v, "CLEAN")
+        self.assertFalse(any(x.startswith("TYPOSQUAT_DIST2") for x in r))
+
+    def test_url_strips_path_and_port(self):
+        # PP17: pasted URLs must reduce to the bare host.
+        r = analyze_domain("https://tokopediа.com/login?x=1")
+        self.assertEqual(r["unicode"], "tokopediа.com")
+        r = analyze_domain("https://tokopediа.com:443/login")
+        self.assertEqual(r["unicode"], "tokopediа.com")
+
+    def test_reasons_deduped(self):
+        # PP18: identical reasons from several labels appear once.
+        r = analyze_domain("tоkо.bаnk.com")
+        self.assertEqual(len(r["reasons"]), len(set(r["reasons"])))
+
+    def test_blank_input_none(self):
+        # PP19: whitespace/empty input yields None, not a CLEAN result.
+        self.assertIsNone(analyze_domain("   "))
+        self.assertIsNone(analyze_domain(""))
