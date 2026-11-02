@@ -9,6 +9,7 @@ Detect IDN homograph & typosquatting attacks on domain names. Stdlib-only Python
 - **False-positive guards**: official-domain whitelist, short-label guard (`bri`/`bni`/`bsi` are 1 edit apart), Indonesian multi-level TLD handling (`co.id`, `go.id`, …), single-script non-Latin IDNs (CJK, Arabic) left alone
 - Verdicts `CLEAN` / `SUSPICIOUS` / `MALICIOUS` with 0–100 risk score and machine-readable reason codes
 - Output as ASCII table or JSON; accepts pasted URLs, not just bare domains
+- **Watchdog mode** (`--watch`): polls Certificate Transparency logs (crt.sh) for newly issued certificates resembling your own brands and alerts on first sight — state file keeps repeats quiet, so it fits a cron job or systemd timer
 
 ## Install
 
@@ -36,6 +37,38 @@ cat subs.txt | ./puny_patrol.py
 # only show risky ones
 ./puny_patrol.py -f domains.txt --min-score 60
 ```
+
+## Watchdog mode
+
+Watch your own brands for newly issued lookalike certificates. Each poll
+fetches crt.sh identities containing your brand's SLD, reports names that
+are brand-like (exact brand on another TLD, brand combo, subdomain
+impersonation, homograph, edit-distance typo) and have never been seen
+before, then records everything in a state file so the next poll stays
+quiet. Exit code `10` means new alerts, `0` means nothing new, `2` means
+a usage/fetch/state error (a failed fetch never touches the state file,
+so an outage cannot swallow an alert).
+
+```bash
+# one poll (first run surfaces the brand's own other-TLD properties too —
+# they are baseline, and go quiet on the next run)
+./puny_patrol.py --watch --brands tokopedia.com,klikbca.co.id \
+    --state ~/.puny-patrol-watch.json
+
+# the same, as an hourly cron job
+0 * * * * /path/to/puny_patrol.py --watch --brands tokopedia.com \
+    --state ~/.puny-patrol-watch.json >> ~/puny-watch.log 2>&1
+
+# continuous loop instead of cron (Ctrl-C exits 130)
+./puny_patrol.py --watch --brands tokopedia.com --loop 3600
+
+# JSON alerts for pipelines, brands from a file
+./puny_patrol.py --watch --brands-file brands.txt --json
+```
+
+Alerting is driven by brand relevance, not by the bundled catalog — a
+watched brand that is not in `OFFICIAL_DOMAINS` still alerts. The
+`verdict`/`score` columns are the regular analyzer's opinion for context.
 
 ## Example
 
@@ -79,7 +112,7 @@ Score ≥ 60 → `MALICIOUS`, 25–59 → `SUSPICIOUS`, < 25 → `CLEAN`.
 ## Tests
 
 ```bash
-python3 -m unittest discover -s tests   # 52 tests, stdlib only — no pytest needed
+python3 -m unittest discover -s tests   # 83 tests, stdlib only — no pytest needed
 ```
 
 ## Limitations
@@ -87,6 +120,8 @@ python3 -m unittest discover -s tests   # 52 tests, stdlib only — no pytest ne
 - Confusable map is a curated subset (~35 entries), not full UTS #39 — rare scripts may slip through
 - Brand catalog covers major Indonesian targets only; edit `OFFICIAL_DOMAINS` in source to extend
 - Heuristic scores are triage signals, not proof of maliciousness — verify before blocking
+- Watchdog recall is substring-limited: the default crt.sh query only finds certificates whose identity contains the brand SLD, so a pure edit-distance or homograph variant that does not embed the SLD string (e.g. `tokopedai.com`, Cyrillic-а `tokopediа.com`) will not be fetched. Feed a broader source via `--ct-url` if that recall matters; the relevance engine still scores dist/homograph signals for any name the feed returns
+- crt.sh itself is occasionally flaky (502/empty backends); a failed poll exits `2` and leaves the state file untouched, so just re-run it
 
 ## License
 

@@ -12,7 +12,12 @@ signs of impersonation attacks, and prints a verdict table (or JSON):
 
 Verdicts: CLEAN (0-24), SUSPICIOUS (25-59), MALICIOUS (60-100).
 
-Stdlib only. Exit codes: 0 = success, 1 = input/usage error.
+Watchdog mode (--watch) polls Certificate Transparency logs (crt.sh)
+for newly issued certificates resembling your own brands and alerts on
+first sight; state is kept in a JSON file so repeats stay quiet.
+
+Stdlib only. Exit codes: 0 = success, 1 = input/usage error,
+2 = watchdog usage/fetch/state error, 10 = watchdog found new alerts.
 Ctrl-C exits gracefully (130).
 """
 
@@ -20,7 +25,10 @@ import argparse
 import json
 import re
 import sys
+import time
 import unicodedata
+import urllib.error
+import urllib.request
 from encodings import idna
 
 # Clean exit on broken pipes (e.g. `puny_patrol.py list.txt | head`).
@@ -30,7 +38,7 @@ try:
 except Exception:
     pass
 
-VERSION = "1.0.1"
+VERSION = "1.2.0"
 
 # ---------------------------------------------------------------------------
 # Confusable skeleton map (subset of Unicode confusables, UTS #39)
@@ -476,6 +484,235 @@ def render_table(results):
 
 
 # ---------------------------------------------------------------------------
+# Watchdog mode: monitor Certificate Transparency logs for new
+# typosquat/homograph domains aimed at your own brands
+# ---------------------------------------------------------------------------
+# One poll per invocation — schedule it with cron / a systemd timer, e.g.:
+#   0 * * * * /path/to/puny_patrol.py --watch --brands bca.co.id \
+#       --state ~/.puny-patrol-watch.json >> ~/puny-watch.log 2>&1
+# Exit codes: 0 = no new brand-like names, 10 = new alerts,
+# 2 = usage/state/fetch failure. A failed fetch never touches the state
+# file, so a transient crt.sh outage cannot swallow an alert.
+
+CT_URL_TEMPLATE = "https://crt.sh/?q=%25.{sld}%25&output=json"
+WATCH_EXIT_ALERT = 10
+
+
+class WatchError(Exception):
+    pass
+
+
+def _watch_host(domain):
+    """Bare hostname from a brand/pasted-URL string."""
+    m = URL_HOST.match(domain.strip())
+    host = m.group(1) if m else domain.strip()
+    return host.rstrip(".")
+
+
+def brand_sld(brand):
+    """Registrable SLD of a watched brand domain ('' if unparseable)."""
+    _raw, labels, _flags = decode_domain(_watch_host(brand))
+    _subs, sld, tld = split_registrable(labels)
+    return sld if tld else ""
+
+
+def watch_relevance(name, brands):
+    """Return (brand_domain, reason) if `name` looks like an attack on one
+    of the watched `brands`, else None.
+
+    Relevance is brand-relative (skeleton / leet / edit distance /
+    brand-token / subdomain), NOT catalog-relative: a watched brand need
+    not be in OFFICIAL_DOMAINS to be protected here.
+    """
+    _raw, labels, _flags = decode_domain(_watch_host(name))
+    if not labels:
+        return None
+    subs, sld, tld = split_registrable(labels)
+    registrable = f"{sld}.{tld}" if tld else sld
+
+    pairs = []
+    for brand_domain in brands:
+        _r, blabels, _f = decode_domain(_watch_host(brand_domain))
+        if not blabels:
+            continue
+        pairs.append((brand_domain, ".".join(blabels), brand_sld(brand_domain)))
+    # The brand's own certs (including its subdomains) are not attacks.
+    if any(registrable == bdomain for _d, bdomain, _s in pairs):
+        return None
+
+    skeleton = to_skeleton(sld)
+    leet_norm = sld.replace("-", "").translate(LEET_MAP)
+    for brand_domain, _bdomain, brand in sorted(pairs, key=lambda p: p[0]):
+        if not brand:
+            continue
+        brand_skel = to_skeleton(brand)
+        if skeleton == brand_skel:
+            if sld == brand:
+                return brand_domain, "EXACT_BRAND_OTHER_TLD"
+            return brand_domain, "SKELETON_HOMOGRAPH"
+        if leet_norm == brand_skel and sld != leet_norm:
+            return brand_domain, "LEET_HYPHEN_SPOOF"
+        if brand_skel != sld and brand_skel in re.split(r"[-_.]", skeleton):
+            return brand_domain, "BRAND_COMBO"
+        if len(skeleton) >= 5 and len(brand_skel) >= 5:
+            d = damerau_levenshtein(skeleton, brand_skel)
+            if d == 1:
+                return brand_domain, "TYPOSQUAT_DIST1"
+            if d == 2 and len(skeleton) >= 8 and len(brand_skel) >= 8:
+                return brand_domain, "TYPOSQUAT_DIST2"
+    # Brand impersonated in a subdomain: klikbca.co.id.evil.com
+    for label in subs:
+        lab_skel = to_skeleton(label)
+        for brand_domain, _bdomain, brand in sorted(pairs, key=lambda p: p[0]):
+            if not brand:
+                continue
+            brand_skel = to_skeleton(brand)
+            if lab_skel == brand_skel or brand_skel in re.split(r"[-_.]", lab_skel):
+                return brand_domain, "SUBDOMAIN_BRAND"
+    return None
+
+
+def fetch_ct_names(brand, url_template=CT_URL_TEMPLATE, timeout=30,
+                   opener=None):
+    """Certificate names for `brand` from a crt.sh-style JSON feed.
+
+    Returns a sorted, de-duplicated list of lowercase hostnames.
+    Wildcards are stripped to their base name; multi-line name_value
+    fields are split. `opener` (url -> parsed JSON) exists so tests and
+    offline setups can run without network.
+
+    The default template searches crt.sh for identities CONTAINING the
+    brand SLD, which is what catches other-TLD copies (tokopedia.id),
+    brand combos (klikbca-login.com) and subdomain impersonation
+    (klikbca.co.id.evil.com). Honest recall limit: a pure edit-distance
+    or homograph variant that does not embed the SLD string
+    (tokopedai.com, tokopediа.com with a Cyrillic а) will NOT match the
+    substring query — use --ct-url with a broader feed (e.g. a
+    certstream-derived list) if that recall matters. Note the relevance
+    engine still scores dist/homograph signals for any name the feed
+    does return; only the feed's recall is substring-limited.
+    """
+    sld = brand_sld(brand)
+    if "{sld}" in url_template and not sld:
+        raise WatchError("cannot derive SLD from brand %r" % brand)
+    url = url_template.format(brand=brand, sld=sld)
+    if opener is not None:
+        try:
+            data = opener(url)
+        except Exception as exc:
+            raise WatchError("CT fetch failed for %s: %s" % (brand, exc))
+    else:
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "puny-patrol-watchdog/" + VERSION})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = json.load(resp)
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            raise WatchError("CT fetch failed for %s: %s" % (brand, exc))
+    names = set()
+    if isinstance(data, list):
+        for entry in data:
+            value = entry.get("name_value", "") if isinstance(entry, dict) else ""
+            for line in value.splitlines():
+                line = line.strip().lower().rstrip(".")
+                if line.startswith("*."):
+                    line = line[2:]
+                if line:
+                    names.add(line)
+    return sorted(names)
+
+
+def load_watch_state(path):
+    """Load watchdog state; missing file -> fresh state, corrupt file ->
+    warning + fresh state (re-alerting beats silently missing alerts)."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            state = json.load(fh)
+        if not isinstance(state, dict):
+            raise ValueError("top level is not an object")
+        return state
+    except FileNotFoundError:
+        return {"version": 1, "brands": {}}
+    except (OSError, ValueError) as exc:
+        print("puny-patrol: warning: unreadable state %s (%s); starting fresh"
+              % (path, exc), file=sys.stderr)
+        return {"version": 1, "brands": {}}
+
+
+def save_watch_state(path, state):
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(state, fh, indent=2, sort_keys=True, ensure_ascii=False)
+    except OSError as exc:
+        raise WatchError("cannot write state %s: %s" % (path, exc))
+
+
+def run_watch(brands, state_path, url_template=CT_URL_TEMPLATE, timeout=30,
+              fetcher=None):
+    """One watchdog poll. Returns the list of new alerts.
+
+    Each alert: {name, brand, reason, verdict, score}. `verdict`/`score`
+    come from the regular analyzer (context only — alerting itself is
+    driven by brand relevance, so watched brands outside the bundled
+    catalog still alert). Only brands that fetched successfully update
+    the state file; if every fetch fails, nothing is saved.
+    """
+    if not brands:
+        raise WatchError("no brands given (use --brands or --brands-file)")
+    state = load_watch_state(state_path)
+    seen_map = state.get("brands", {})
+    if not isinstance(seen_map, dict):
+        seen_map = {}
+    alerts, failed = [], []
+    for brand in brands:
+        try:
+            if fetcher is not None:
+                names = fetcher(brand)
+            else:
+                names = fetch_ct_names(brand, url_template, timeout)
+        except WatchError as exc:
+            print("puny-patrol: %s" % exc, file=sys.stderr)
+            failed.append(brand)
+            continue
+        seen = set(seen_map.get(brand, []))
+        for name in names:
+            if name in seen:
+                continue
+            hit = watch_relevance(name, brands)
+            if hit is not None:
+                brand_domain, reason = hit
+                verdict = analyze_domain(name)
+                alerts.append({
+                    "name": name,
+                    "brand": brand_domain,
+                    "reason": reason,
+                    "verdict": verdict["verdict"] if verdict else "CLEAN",
+                    "score": verdict["score"] if verdict else 0,
+                })
+        seen_map[brand] = sorted(seen | set(names))
+    if failed and len(failed) == len(brands):
+        raise WatchError("all CT fetches failed; state not saved")
+    state["brands"] = seen_map
+    state["last_check"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    save_watch_state(state_path, state)
+    return alerts
+
+
+def render_watch(alerts, json_output=False):
+    if json_output:
+        print(json.dumps(alerts, indent=2, ensure_ascii=False))
+        return
+    if not alerts:
+        print("watchdog: no new brand-like domains")
+        return
+    print("watchdog: %d NEW brand-like domain(s):" % len(alerts))
+    for a in alerts:
+        print("  %-28s brand=%s reason=%s verdict=%s score=%d" % (
+            _term_safe(a["name"][:28]), a["brand"], a["reason"],
+            a["verdict"], a["score"]))
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -517,8 +754,59 @@ def main(argv=None):
                     help="output JSON instead of table")
     ap.add_argument("--min-score", type=int, default=0, metavar="N",
                     help="only show results with score >= N")
+    ap.add_argument("--watch", action="store_true",
+                    help="watchdog mode: poll CT logs for new domains "
+                         "resembling --brands, alert on first sight")
+    ap.add_argument("--brands", metavar="DOMAINS",
+                    help="comma-separated brand domains to watch")
+    ap.add_argument("--brands-file", metavar="PATH",
+                    help="file with one brand domain per line (# = comment)")
+    ap.add_argument("--state", metavar="PATH",
+                    default=".puny-patrol-watch-state.json",
+                    help="watchdog state file "
+                         "(default: .puny-patrol-watch-state.json)")
+    ap.add_argument("--loop", type=int, default=0, metavar="SECONDS",
+                    help="in --watch mode, repeat polling every SECONDS "
+                         "(0 = poll once)")
+    ap.add_argument("--ct-url", metavar="TEMPLATE", default=CT_URL_TEMPLATE,
+                    help="CT feed URL template with {brand} and {sld} "
+                         "placeholders (default: crt.sh substring search)")
+    ap.add_argument("--ct-timeout", type=int, default=30, metavar="SECONDS",
+                    help="CT fetch timeout (default: 30)")
     ap.add_argument("--version", action="version", version="%(prog)s " + VERSION)
     args = ap.parse_args(argv)
+
+    if args.watch:
+        if args.loop < 0 or args.ct_timeout <= 0:
+            print("puny-patrol: --loop must be >= 0 and --ct-timeout > 0",
+                  file=sys.stderr)
+            return 2
+        brands = []
+        if args.brands:
+            brands += [b.strip() for b in args.brands.split(",") if b.strip()]
+        if args.brands_file:
+            try:
+                with open(args.brands_file, encoding="utf-8",
+                          errors="replace") as fh:
+                    for line in fh:
+                        line = line.strip()
+                        if line and not line.startswith("#"):
+                            brands.append(line)
+            except OSError as exc:
+                print("puny-patrol: cannot read %s: %s"
+                      % (args.brands_file, exc), file=sys.stderr)
+                return 2
+        while True:
+            try:
+                alerts = run_watch(brands, args.state,
+                                   args.ct_url, args.ct_timeout)
+            except WatchError as exc:
+                print("puny-patrol: %s" % exc, file=sys.stderr)
+                return 2
+            render_watch(alerts, args.json)
+            if args.loop <= 0:
+                return WATCH_EXIT_ALERT if alerts else 0
+            time.sleep(args.loop)
 
     results = []
     for raw in iter_inputs(args):
