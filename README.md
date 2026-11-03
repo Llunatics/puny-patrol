@@ -112,7 +112,7 @@ Score ≥ 60 → `MALICIOUS`, 25–59 → `SUSPICIOUS`, < 25 → `CLEAN`.
 ## Tests
 
 ```bash
-python3 -m unittest discover -s tests   # 83 tests, stdlib only — no pytest needed
+python3 -m unittest discover -s tests   # 89 tests, stdlib only — no pytest needed
 ```
 
 ## Limitations
@@ -121,7 +121,7 @@ python3 -m unittest discover -s tests   # 83 tests, stdlib only — no pytest ne
 - Brand catalog covers major Indonesian targets only; edit `OFFICIAL_DOMAINS` in source to extend
 - Heuristic scores are triage signals, not proof of maliciousness — verify before blocking
 - Watchdog recall is substring-limited: the default crt.sh query only finds certificates whose identity contains the brand SLD, so a pure edit-distance or homograph variant that does not embed the SLD string (e.g. `tokopedai.com`, Cyrillic-а `tokopediа.com`) will not be fetched. Feed a broader source via `--ct-url` if that recall matters; the relevance engine still scores dist/homograph signals for any name the feed returns
-- crt.sh itself is occasionally flaky (502/empty backends); a failed poll exits `2` and leaves the state file untouched, so just re-run it
+- crt.sh itself is occasionally flaky (502/empty backends); a failed single-shot poll exits `2` and leaves the state file untouched, so just re-run it — in `--loop` mode the watchdog stays alive and retries at the next interval instead of dying
 
 ## License
 

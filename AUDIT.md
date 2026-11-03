@@ -3,6 +3,51 @@
 Findings and fixes per release, newest first. "Verified" means the check
 was actually run, not just reasoned about.
 
+## v1.2.1 — Watchdog audit (2026-11-03)
+
+Tuesday audit of the v1.2.0 watchdog feature. Baseline suite green
+(83/83) before any change; 5 real bugs fixed, all with regression
+tests (suite now 89/89):
+
+1. **Duplicate alerts in one poll.** Watching two brands that share an
+   SLD (`tokopedia.com` + `tokopedia.co.id`) alerted twice for the same
+   domain in a single run, because state is keyed per brand string.
+   Now one alert per domain per poll (first attribution kept).
+2. **Own domain flagged when the brand was written with a subdomain.**
+   Watching `www.tokopedia.com` alerted on `tokopedia.com` itself as
+   `EXACT_BRAND_OTHER_TLD`, because the own-domain skip compared
+   against the full brand string. The skip now compares registrable
+   domains, so a brand's own apex and subdomains are always skipped
+   regardless of how the brand was spelled.
+3. **State-key spelling drift re-alerted everything.** `Tokopedia.COM.`
+   and `tokopedia.com` wrote different state keys, so a spelling change
+   re-alerted the whole history. Brand keys are now normalized
+   (host extracted, lowercased, trailing dot stripped) before state
+   lookup — one-time cost: state files written by v1.2.0 under a
+   non-normalized key re-alert once.
+4. **Terminal injection via the brand string.** Cert names were already
+   escaped in table output, but the operator-supplied brand was printed
+   raw — an ESC smuggled into a brands file would pass through. Now
+   passed through `_term_safe` like every other untrusted string
+   (JSON output keeps raw values, safely escaped by `json.dumps`).
+5. **`--loop` died on the first transient crt.sh outage.** A watchdog
+   daemon that exits on a documented-flaky feed alerts nobody, so
+   all-fetch-failed is now a distinct retryable error
+   (`WatchFetchError`, still a `WatchError` subclass): `--loop` mode
+   sleeps and retries next interval, single-shot mode still exits 2.
+   Usage/state errors still fail immediately in both modes.
+
+Verified: suite 89/89 green (working tree, stdlib only); adversarial
+probes 1–3 and 5 above re-run clean after the fix; CLI smoke
+(`tokopediа.com` Cyrillic → MALICIOUS 100, controls unchanged); live
+crt.sh smoke `--watch --brands tokopedia.com` returned 20 new
+brand-like names (e.g. `cdn1.tokopedia.net`, other-TLD brand copies —
+expected watchdog semantics: CT alone cannot tell own-brand
+infrastructure from an attacker copy, so other-TLD copies alert by
+design). Deliberately unchanged: per-brand state scoping, partial
+failure keeping good brands' state, corrupt-state warning + fresh
+start.
+
 ## v1.2.0 — Watchdog mode (upgrade, 2026-11-02)
 
 New feature, not just a fix: `--watch` polls Certificate Transparency

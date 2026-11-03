@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 """Tests for puny_patrol.py watchdog mode — run with: python3 -m unittest discover -s tests"""
+import io
 import json
 import os
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import puny_patrol
 from puny_patrol import (
-    WatchError, brand_sld, fetch_ct_names, run_watch, watch_relevance,
+    WatchError, WatchFetchError, brand_sld, fetch_ct_names, main,
+    render_watch, run_watch, watch_relevance,
 )
 
 BRANDS = ["klikbca.co.id", "tokopedia.com"]
@@ -56,6 +61,14 @@ class TestWatchRelevance(unittest.TestCase):
     def test_own_domain_skipped(self):
         self.assertIsNone(relevance("klikbca.co.id"))
         self.assertIsNone(relevance("login.klikbca.co.id"))
+
+    def test_own_domain_skipped_when_brand_has_subdomain(self):
+        # Watching www.tokopedia.com must not alert on tokopedia.com
+        # itself (audit 2026-11-03: registrable comparison, not the full
+        # brand string).
+        self.assertIsNone(relevance("tokopedia.com", ["www.tokopedia.com"]))
+        self.assertIsNone(relevance("mail.tokopedia.com",
+                                     ["www.tokopedia.com"]))
 
     def test_unrelated_skipped(self):
         self.assertIsNone(relevance("random-shop.com"))
@@ -175,6 +188,61 @@ class TestRunWatch(unittest.TestCase):
     def test_no_brands_is_usage_error(self):
         with self.assertRaises(WatchError):
             run_watch([], self.state, fetcher=self.fake_feed({}))
+
+    def test_cross_brand_duplicate_alerts_once(self):
+        # Brands sharing an SLD used to alert twice for one domain.
+        feed = {"tokopedia.com": ["tokopediax.com"],
+                "tokopedia.co.id": ["tokopediax.com"]}
+        alerts = run_watch(["tokopedia.com", "tokopedia.co.id"],
+                           self.state, fetcher=self.fake_feed(feed))
+        self.assertEqual([a["name"] for a in alerts], ["tokopediax.com"])
+
+    def test_brand_spelling_normalized_across_runs(self):
+        # Case / trailing-dot variants share one state key: no re-alert.
+        feed = {"tokopedia.com": ["tokopediax.com"]}
+        run_watch(["Tokopedia.COM."], self.state,
+                  fetcher=self.fake_feed(feed))
+        self.assertEqual(run_watch(["tokopedia.com"], self.state,
+                                   fetcher=self.fake_feed(feed)), [])
+        with open(self.state, encoding="utf-8") as fh:
+            state = json.load(fh)
+        self.assertEqual(sorted(state["brands"]), ["tokopedia.com"])
+
+    def test_total_failure_is_retryable_fetch_error(self):
+        def fetcher(brand):
+            raise WatchError("down")
+        with self.assertRaises(WatchFetchError):
+            run_watch(["klikbca.co.id"], self.state, fetcher=fetcher)
+        self.assertTrue(issubclass(WatchFetchError, WatchError))
+
+    def test_loop_retries_fetch_failure_then_polls_again(self):
+        # --loop survives a transient all-fetch failure; single-shot
+        # mode still exits 2 (covered by test_total_failure_* above).
+        calls = {"n": 0}
+
+        def fake_run(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise WatchFetchError("down")
+            return []
+
+        with mock.patch.object(puny_patrol, "run_watch",
+                               side_effect=fake_run):
+            with mock.patch("time.sleep",
+                            side_effect=[None, KeyboardInterrupt]):
+                with self.assertRaises(KeyboardInterrupt):
+                    main(["--watch", "--brands", "tokopedia.com",
+                          "--loop", "5", "--state", self.state])
+        self.assertEqual(calls["n"], 2)
+
+    def test_render_watch_strips_control_chars_from_brand(self):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            render_watch([{"name": "tokopediax.com",
+                           "brand": "tokopedia\x1b[31m.com",
+                           "reason": "TYPOSQUAT_DIST1",
+                           "verdict": "MALICIOUS", "score": 70}])
+        self.assertNotIn("\x1b", buf.getvalue())
 
 
 if __name__ == "__main__":

@@ -38,7 +38,7 @@ try:
 except Exception:
     pass
 
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 
 # ---------------------------------------------------------------------------
 # Confusable skeleton map (subset of Unicode confusables, UTS #39)
@@ -502,6 +502,12 @@ class WatchError(Exception):
     pass
 
 
+class WatchFetchError(WatchError):
+    """All CT fetches failed (transient) — retryable in --loop mode,
+    unlike usage/state errors which fail immediately either way."""
+    pass
+
+
 def _watch_host(domain):
     """Bare hostname from a brand/pasted-URL string."""
     m = URL_HOST.match(domain.strip())
@@ -535,9 +541,14 @@ def watch_relevance(name, brands):
         _r, blabels, _f = decode_domain(_watch_host(brand_domain))
         if not blabels:
             continue
-        pairs.append((brand_domain, ".".join(blabels), brand_sld(brand_domain)))
+        _bs, bsld, btld = split_registrable(blabels)
+        breg = f"{bsld}.{btld}" if btld else bsld
+        pairs.append((".".join(blabels), breg, brand_sld(brand_domain)))
     # The brand's own certs (including its subdomains) are not attacks.
-    if any(registrable == bdomain for _d, bdomain, _s in pairs):
+    # Compared on the brand's REGISTRABLE domain, so watching
+    # 'www.tokopedia.com' still skips tokopedia.com itself — comparing
+    # against the full brand string used to alert on the brand's own apex.
+    if any(registrable == breg for _d, breg, _s in pairs):
         return None
 
     skeleton = to_skeleton(sld)
@@ -659,11 +670,24 @@ def run_watch(brands, state_path, url_template=CT_URL_TEMPLATE, timeout=30,
     """
     if not brands:
         raise WatchError("no brands given (use --brands or --brands-file)")
+    # Normalize state keys: case, trailing dot, and URL-wrapped spellings
+    # of one brand must share a key, or a spelling change re-alerts
+    # everything that brand ever saw. (One-time cost: state files written
+    # by v1.2.0 under a non-normalized key re-alert once.)
+    normed, _seen_keys = [], set()
+    for _b in brands:
+        _nb = _watch_host(_b).strip().lower()
+        if _nb and _nb not in _seen_keys:
+            _seen_keys.add(_nb)
+            normed.append(_nb)
+    brands = normed
+    if not brands:
+        raise WatchError("no brands given (use --brands or --brands-file)")
     state = load_watch_state(state_path)
     seen_map = state.get("brands", {})
     if not isinstance(seen_map, dict):
         seen_map = {}
-    alerts, failed = [], []
+    alerts, failed, alerted = [], [], set()
     for brand in brands:
         try:
             if fetcher is not None:
@@ -679,7 +703,11 @@ def run_watch(brands, state_path, url_template=CT_URL_TEMPLATE, timeout=30,
             if name in seen:
                 continue
             hit = watch_relevance(name, brands)
-            if hit is not None:
+            # One alert per domain per poll: brands sharing an SLD
+            # (tokopedia.com + tokopedia.co.id) used to alert twice for
+            # the same name in a single run.
+            if hit is not None and name not in alerted:
+                alerted.add(name)
                 brand_domain, reason = hit
                 verdict = analyze_domain(name)
                 alerts.append({
@@ -691,7 +719,7 @@ def run_watch(brands, state_path, url_template=CT_URL_TEMPLATE, timeout=30,
                 })
         seen_map[brand] = sorted(seen | set(names))
     if failed and len(failed) == len(brands):
-        raise WatchError("all CT fetches failed; state not saved")
+        raise WatchFetchError("all CT fetches failed; state not saved")
     state["brands"] = seen_map
     state["last_check"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     save_watch_state(state_path, state)
@@ -708,7 +736,7 @@ def render_watch(alerts, json_output=False):
     print("watchdog: %d NEW brand-like domain(s):" % len(alerts))
     for a in alerts:
         print("  %-28s brand=%s reason=%s verdict=%s score=%d" % (
-            _term_safe(a["name"][:28]), a["brand"], a["reason"],
+            _term_safe(a["name"][:28]), _term_safe(a["brand"]), a["reason"],
             a["verdict"], a["score"]))
 
 
@@ -800,6 +828,15 @@ def main(argv=None):
             try:
                 alerts = run_watch(brands, args.state,
                                    args.ct_url, args.ct_timeout)
+            except WatchFetchError as exc:
+                # Transient crt.sh outage: in --loop mode stay alive and
+                # retry next interval (a dead watchdog alerts nobody);
+                # single-shot mode still fails loudly with exit 2.
+                print("puny-patrol: %s" % exc, file=sys.stderr)
+                if args.loop <= 0:
+                    return 2
+                time.sleep(args.loop)
+                continue
             except WatchError as exc:
                 print("puny-patrol: %s" % exc, file=sys.stderr)
                 return 2
